@@ -1880,7 +1880,7 @@ def _maybe_unregister_gateway_service(profile_name: str) -> None:
 
 
 def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
-    """Disable and remove systemd/launchd service for a profile."""
+    """Disable and remove systemd/launchd/Task Scheduler service for a profile."""
     import platform as _platform
 
     # Derive service name for this profile
@@ -1918,6 +1918,44 @@ def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
                 )
                 plist_path.unlink(missing_ok=True)
                 print("✓ Launchd service removed")
+
+        elif _platform.system() == "Windows":
+            # Windows profile gateways are persisted through Task Scheduler (or
+            # the Startup-folder fallback).  The generic profile deletion path
+            # runs before the profile directory is removed, so delegate to the
+            # Windows backend while HERMES_HOME still points at this profile.
+            # Stop first to prevent a scheduled task from relaunching the
+            # gateway while rmtree is walking the profile tree, then remove the
+            # task, fallback login item, and generated launchers.
+            from hermes_cli import gateway_windows
+
+            try:
+                # Avoid noisy stop output and an unnecessary schtasks query when
+                # this profile has no Windows persistence entry. Directly
+                # started gateways are still handled by _stop_gateway_process
+                # and _stop_profile_backends below.
+                if not gateway_windows.is_installed():
+                    return
+            except Exception:
+                # If the service probe itself fails, continue with both cleanup
+                # calls; they are independently best-effort and may still clear
+                # a partially registered task.
+                pass
+
+            try:
+                gateway_windows.stop()
+            except Exception as stop_error:
+                # Keep cleanup going: uninstall may still be able to remove the
+                # task even when the process-level stop path is unavailable.
+                print(f"⚠ Windows gateway stop during profile cleanup: {stop_error}")
+
+            try:
+                gateway_windows.uninstall()
+            except Exception as uninstall_error:
+                # Service cleanup is best-effort, matching the systemd/launchd
+                # branches above. The subsequent profile removal reports any
+                # remaining file-lock failure to the caller.
+                print(f"⚠ Windows gateway service cleanup: {uninstall_error}")
     except Exception as e:
         print(f"⚠ Service cleanup: {e}")
     finally:

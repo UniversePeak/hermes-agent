@@ -273,6 +273,67 @@ class TestDeleteProfile:
         assert profile_dir.is_dir()
         assert get_active_profile() == "default"
 
+    def test_windows_cleanup_stops_and_uninstalls_profile_gateway(
+        self, profile_env, monkeypatch
+    ):
+        """Profile deletion must stop and remove the Windows Task Scheduler entry."""
+        profile_dir = create_profile("coder", no_alias=True)
+        original_home = os.environ["HERMES_HOME"]
+        calls = []
+
+        import hermes_cli.gateway_windows as gateway_windows
+
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setattr(gateway_windows, "is_installed", lambda: True)
+        monkeypatch.setattr(
+            gateway_windows,
+            "stop",
+            lambda: calls.append(("stop", os.environ["HERMES_HOME"])),
+        )
+        monkeypatch.setattr(
+            gateway_windows,
+            "uninstall",
+            lambda: calls.append(("uninstall", os.environ["HERMES_HOME"])),
+        )
+
+        profiles._cleanup_gateway_service("coder", profile_dir)
+
+        assert calls == [
+            ("stop", str(profile_dir)),
+            ("uninstall", str(profile_dir)),
+        ]
+        assert os.environ["HERMES_HOME"] == original_home
+
+    def test_windows_cleanup_uninstalls_after_stop_failure(
+        self, profile_env, monkeypatch, capsys
+    ):
+        """A stop failure must not leave the Scheduled Task cleanup unattempted."""
+        profile_dir = create_profile("coder", no_alias=True)
+        original_home = os.environ["HERMES_HOME"]
+        calls = []
+
+        import hermes_cli.gateway_windows as gateway_windows
+
+        monkeypatch.setattr("platform.system", lambda: "Windows")
+        monkeypatch.setattr(gateway_windows, "is_installed", lambda: True)
+
+        def fail_stop():
+            calls.append("stop")
+            raise RuntimeError("simulated stop failure")
+
+        monkeypatch.setattr(gateway_windows, "stop", fail_stop)
+        monkeypatch.setattr(
+            gateway_windows,
+            "uninstall",
+            lambda: calls.append("uninstall"),
+        )
+
+        profiles._cleanup_gateway_service("coder", profile_dir)
+
+        assert calls == ["stop", "uninstall"]
+        assert "simulated stop failure" in capsys.readouterr().out
+        assert os.environ["HERMES_HOME"] == original_home
+
 
 
     def test_backend_scan_only_matches_this_profile(self, profile_env, monkeypatch):
