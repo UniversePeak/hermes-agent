@@ -93,6 +93,36 @@ export function _resetConnectionsForTests(): void {
   $pendingConnectionId.set(null)
 }
 
+/**
+ * Forget a profile that was removed from a connection.
+ *
+ * The preference is renderer-local, but a deleted profile must not remain a
+ * valid boot-time target after the backend has removed it. Only clear the
+ * matching value for the supplied connection; another connection may still
+ * legitimately use the same profile name.
+ */
+export function forgetLastProfileForConnection(
+  connectionId: string | null | undefined,
+  profile: string | null | undefined
+): void {
+  const normalizedConnectionId = connectionId?.trim()
+  const normalizedProfile = normalizeProfileKey(profile)
+
+  if (!normalizedConnectionId || !normalizedProfile) {
+    return
+  }
+
+  const storedProfile = $lastProfileByConnection.get()[normalizedConnectionId]
+
+  if (!storedProfile || normalizeProfileKey(storedProfile) !== normalizedProfile) {
+    return
+  }
+
+  const next = { ...$lastProfileByConnection.get() }
+  delete next[normalizedConnectionId]
+  $lastProfileByConnection.set(next)
+}
+
 export function setConnectionsRegistry(registry: DesktopConnectionsRegistry): void {
   $connectionsRegistry.set(registry)
 }

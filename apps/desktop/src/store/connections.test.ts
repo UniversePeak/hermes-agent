@@ -84,6 +84,7 @@ const {
   initializeConnectionsRegistry,
   refreshConnectionsRegistry,
   _resetConnectionsForTests,
+  forgetLastProfileForConnection,
   selectConnection,
   setConnectionsRegistry
 } = await import('./connections')
@@ -278,6 +279,20 @@ describe('selectConnection', () => {
     await selectConnection('local')
 
     expect(ensureGatewayAgent).toHaveBeenCalledWith('local', 'research', expect.anything())
+  })
+
+  it('does not restore a profile after it was deleted from that source', async () => {
+    setConnectionsRegistry(registry)
+    $connection.set({ connectionId: 'local', mode: 'local', profile: 'research', registryScoped: true })
+    $activeGatewayProfile.set('research')
+    $connection.set({ connectionId: 'homelab', mode: 'remote', registryScoped: true })
+    $activeGatewayProfile.set('default')
+
+    forgetLastProfileForConnection('local', 'research')
+    await selectConnection('local')
+
+    expect(ensureGatewayAgent).toHaveBeenCalledWith('local', 'default', expect.any(Object))
+    expect(ensureGatewayAgent).not.toHaveBeenCalledWith('local', 'research', expect.anything())
   })
 
   it('does not remember a migrated v1 routing alias as a backend profile', async () => {
