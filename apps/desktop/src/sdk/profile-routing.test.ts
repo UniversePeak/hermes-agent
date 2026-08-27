@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { HermesConnection } from '@/global'
 import type { ProfileInfo } from '@/types/hermes'
 
 vi.mock('@/app/chat/session-view', async () => {
@@ -16,6 +17,14 @@ vi.mock('@/components/pane-shell/tree/store', async () => {
 vi.mock('@/contrib/events', () => ({ onGatewayEvent: vi.fn() }))
 vi.mock('@/hermes', () => ({ deleteProfile: vi.fn(), getLogs: vi.fn(), getStatus: vi.fn() }))
 vi.mock('@/store/notifications', () => ({ notify: vi.fn(), notifyError: vi.fn() }))
+vi.mock('@/store/connections', async () => {
+  const { atom } = await import('nanostores')
+
+  return {
+    $activeConnectionId: atom('local'),
+    forgetLastProfileForConnection: vi.fn()
+  }
+})
 vi.mock('@/store/system-actions', () => ({ runGatewayRestart: vi.fn() }))
 vi.mock('@/store/session', async () => {
   const { atom } = await import('nanostores')
@@ -82,6 +91,7 @@ vi.mock('@/store/gateway', async () => {
 
   return {
     $gateway: atom(null),
+    activeGatewayConnectionId: vi.fn(() => 'local'),
     ensureGatewayForAgent: vi.fn(),
     openGatewayForAgent: vi.fn(),
     openGatewayForProfile: vi.fn(),
@@ -105,8 +115,10 @@ vi.mock('@/store/gateway', async () => {
 const { host } = await import('./index')
 const { openSession: openSessionCore } = await import('@/app/open-session')
 const { deleteProfile } = await import('@/hermes')
+const { forgetLastProfileForConnection } = await import('@/store/connections')
 
 const {
+  activeGatewayConnectionId,
   openGatewayForAgent,
   openGatewayForProfile,
   requestGatewayForAgent,
@@ -130,6 +142,7 @@ const { setWorkspaceScope } = await import('@/components/pane-shell/workspace-sc
 
 const {
   $activeSessionId,
+  $connection,
   $messages,
   $selectedStoredSessionId,
   requestSessionResume,
@@ -151,7 +164,9 @@ const profile = (name: string): ProfileInfo => ({
 
 afterEach(() => {
   vi.clearAllMocks()
+  vi.mocked(activeGatewayConnectionId).mockReturnValue('local')
   $activeGatewayProfile.set('remote-worker')
+  $connection.set(null)
   $gatewaySwapTarget.set(null)
   setMockAtom($focusedRuntimeId, null)
   setMockAtom($focusedStoredSessionId, null)
@@ -170,6 +185,8 @@ describe('connection-aware plugin host APIs', () => {
   it('retires a profile gateway before deleting it', async () => {
     const order: string[] = []
 
+    $connection.set({ connectionId: 'local', mode: 'local' } as HermesConnection)
+
     vi.mocked(retireLocalProfileGateways).mockImplementationOnce(() => {
       order.push('retire')
     })
@@ -183,9 +200,22 @@ describe('connection-aware plugin host APIs', () => {
 
     expect(order).toEqual(['retire', 'delete'])
     expect(retireLocalProfileGateways).toHaveBeenCalledWith('worker')
+    expect(forgetLastProfileForConnection).toHaveBeenCalledWith('local', 'worker')
     // The rail paints from $profiles; skipping the refresh leaves a stale
     // badge whose click hot-loops against the deletion guard (#88769).
     expect(refreshProfiles).toHaveBeenCalled()
+  })
+
+  it('pins an ambient SSH profile delete to the active connection and target profile', async () => {
+    vi.mocked(activeGatewayConnectionId).mockReturnValue('ssh-vps')
+
+    await host.deleteProfile('worker')
+
+    expect(retireLocalProfileGateways).not.toHaveBeenCalled()
+    expect(deleteProfile).toHaveBeenCalledWith('worker', {
+      connectionId: 'ssh-vps',
+      profile: 'worker'
+    })
   })
 
   it('refreshes the profile inventory before asking Electron for routes', async () => {
